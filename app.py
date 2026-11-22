@@ -29,8 +29,15 @@ HOST = os.environ.get('SECURESHOP_HOST', '127.0.0.1')
 PORT = int(os.environ.get('SECURESHOP_PORT', '8000'))
 SESSION_AGE = 60 * 60 * 8
 MFA_PENDING_AGE = 5 * 60
+MFA_FAILURES_PER_LOCK = 5
+MFA_LOCK_BASE = 5 * 60
+MFA_LOCK_MAX = 60 * 60
 MAX_BODY = 16_384
 RISK_GATE_ENFORCE = os.environ.get('SECURESHOP_RISK_GATE_ENFORCE') == '1'  # Optional, otherwise demo check only
+
+# Hash computed once at startup so a login attempt for an unknown email still
+# performs a real Argon2 verification and leaks no existence signal by timing.
+DUMMY_PASSWORD_HASH = hash_password('not a real password - timing parity')
 
 
 @contextmanager
@@ -77,10 +84,57 @@ def authenticator_qr(secret, account_email):
     return base64.b64encode(output.getvalue()).decode('ascii')
 
 
+def ip_budget(conn, bucket, ip, limit=10, window=600):
+    """Fixed-window per-IP throttle for unauthenticated write endpoints."""
+    key = token_hash(bucket + '|' + ip)
+    cutoff = int(time.time()) - window
+    conn.execute('DELETE FROM login_attempts WHERE at<?', (cutoff,))
+    if conn.execute('SELECT COUNT(*) AS n FROM login_attempts WHERE key_hash=? AND at>?', (key, cutoff)).fetchone()['n'] >= limit:
+        return False
+    conn.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)', (key, int(time.time())))
+    return True
+
+
+def reserve_attempt(conn, key, limit=5, window=600):
+    """Atomically reserve a password-attempt slot before expensive hashing."""
+    now = int(time.time())
+    cutoff = now - window
+    with transaction(conn):
+        conn.execute('DELETE FROM login_attempts WHERE at<?', (cutoff,))
+        attempts = conn.execute(
+            'SELECT COUNT(*) AS n FROM login_attempts WHERE key_hash=? AND at>?',
+            (key, cutoff)).fetchone()['n']
+        if attempts >= limit:
+            return False
+        conn.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)', (key, now))
+    return True
+
+
+def mfa_lock_seconds(failures):
+    if failures % MFA_FAILURES_PER_LOCK:
+        return 0
+    level = max(0, failures // MFA_FAILURES_PER_LOCK - 1)
+    return min(MFA_LOCK_MAX, MFA_LOCK_BASE * (2 ** level))
+
+
+def issue_recovery_codes(conn, user_id):
+    """Replace the user's single-use recovery set; returns the 8 plaintext
+    codes for a one-time display. Only SHA-256 digests are persisted."""
+    conn.execute('DELETE FROM recovery_codes WHERE user_id=?', (user_id,))
+    codes = []
+    for _ in range(8):
+        code = secrets.token_hex(2).upper() + '-' + secrets.token_hex(2).upper()
+        conn.execute('INSERT INTO recovery_codes(user_id,code_hash) VALUES(?,?)',
+                     (user_id, token_hash(code)))
+        codes.append(code)
+    return codes
+
+
 def audit_event(conn, event, actor_id=None, target_type=None, target_id=None):
     # Record security events without passwords, OTPs, tokens or user input.
     allowed = {
         'login_failed', 'login_success', 'mfa_failed', 'mfa_success', 'mfa_enabled',
+        'mfa_recovery_used', 'mfa_recovery_regenerated',
         'admin_denied', 'csrf_rejected', 'checkout_complete',
         'admin_product_changed', 'admin_coupon_changed', 'admin_user_changed',
         'behavior_enrolled', 'behavior_anomaly', 'passkey_registered', 'passkey_rejected',
@@ -123,6 +177,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS confirmations (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           expires_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS pending_registrations (
+          email TEXT PRIMARY KEY, display_name TEXT NOT NULL, password_hash TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (
           id_hash TEXT PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
           csrf TEXT NOT NULL, expires_at INTEGER NOT NULL, pending_user_id INTEGER REFERENCES users(id),
@@ -165,6 +222,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS login_attempts (
           key_hash TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(key_hash,at);
+        CREATE TABLE IF NOT EXISTS mfa_throttles (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          failures INTEGER NOT NULL DEFAULT 0,
+          locked_until INTEGER NOT NULL DEFAULT 0,
+          last_failure_at INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS behavior_profiles (
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             samples TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -175,12 +237,19 @@ def init_db():
         CREATE TABLE IF NOT EXISTS passkey_challenges (
             session_hash TEXT PRIMARY KEY REFERENCES sessions(id_hash) ON DELETE CASCADE,
             challenge TEXT NOT NULL, purpose TEXT NOT NULL, expires_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS recovery_codes (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            code_hash TEXT PRIMARY KEY);
 
         ''')
         # Non-destructive migration for databases created before Location and time policy support.
         names = {row['name'] for row in c.execute('PRAGMA table_info(sessions)')}
         if 'pending_passkey_id' not in names:
             c.execute('ALTER TABLE sessions ADD COLUMN pending_passkey_id INTEGER REFERENCES users(id)')
+        order_cols = {row['name'] for row in c.execute('PRAGMA table_info(orders)')}
+        if 'idempotency_key' not in order_cols:
+            c.execute('ALTER TABLE orders ADD COLUMN idempotency_key TEXT')
+        c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idem ON orders(user_id, idempotency_key)')
         if not c.execute('SELECT 1 FROM products LIMIT 1').fetchone():
             c.executemany('INSERT INTO products(name,description,price_cents,stock) VALUES(?,?,?,?)', [
                 ('Spanish Latte', 'Velvety espresso, steamed milk, and our signature sweet condensed milk.', 2499, 40),
@@ -494,9 +563,11 @@ class App(BaseHTTPRequestHandler):
             if not self.must_login(): return
             profile = c.execute('SELECT samples FROM behavior_profiles WHERE user_id=?',(self.user['id'],)).fetchone()
             credentials = c.execute('SELECT COUNT(*) FROM passkeys WHERE user_id=?',(self.user['id'],)).fetchone()[0]
+            recovery_left = c.execute('SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id=?',(self.user['id'],)).fetchone()['n']
             content = ('<div class="panel"><h2>Account security center</h2>'
                        '<p>Behavioral enrollment: '+('Ready' if profile and len(json.loads(profile['samples']))>=5 else 'Not ready')+'</p>'
                        '<p>Registered passkeys: '+str(credentials)+'</p>'
+                       + ('<p>Recovery codes remaining: '+str(recovery_left)+' — <a href="/mfa/recovery">manage</a></p>' if self.user['totp_secret'] else '') +
                        '<p><a class="btn" href="/security/behavior">Enroll typing rhythm</a></p>'
                        '<p><strong>Passkey registration (localhost / supported browser)</strong></p>'
                        '<form id="passkey-register-form">'+self.csrf_field()+
@@ -535,17 +606,46 @@ class App(BaseHTTPRequestHandler):
             self.send_html(200,self.page('Register' if register else 'Login',body))
         elif path == '/confirm':
             token = query.get('token', [''])[0]
-            row = c.execute('SELECT user_id FROM confirmations WHERE token_hash=? AND expires_at>?',(token_hash(token),int(time.time()))).fetchone() if token else None
-            if not row: return self.error(400,'Confirmation link invalid or expired.')
+            if not token: return self.error(400,'Confirmation link invalid or expired.')
             with transaction(c):
-                c.execute('UPDATE users SET confirmed=1 WHERE id=?',(row['user_id'],))
-                c.execute('DELETE FROM confirmations WHERE user_id=?',(row['user_id'],))
+                now=int(time.time())
+                row=c.execute('SELECT email,display_name,password_hash FROM pending_registrations WHERE token_hash=? AND expires_at>?',(token_hash(token),now)).fetchone()
+                if row:
+                    existing=c.execute('SELECT id,confirmed FROM users WHERE email=?',(row['email'],)).fetchone()
+                    if existing and existing['confirmed']:
+                        c.execute('DELETE FROM pending_registrations WHERE email=?',(row['email'],))
+                    else:
+                        if existing:
+                            c.execute('DELETE FROM users WHERE id=?',(existing['id'],))
+                        c.execute('INSERT INTO users(email,display_name,password_hash,confirmed) VALUES(?,?,?,1)',
+                                  (row['email'],row['display_name'],row['password_hash']))
+                        c.execute('DELETE FROM pending_registrations WHERE email=?',(row['email'],))
+                else:
+                    legacy=c.execute('SELECT user_id FROM confirmations WHERE token_hash=? AND expires_at>?',(token_hash(token),now)).fetchone()
+                    if not legacy:
+                        return self.error(400,'Confirmation link invalid or expired.')
+                    c.execute('UPDATE users SET confirmed=1 WHERE id=?',(legacy['user_id'],))
+                    c.execute('DELETE FROM confirmations WHERE user_id=?',(legacy['user_id'],))
             self.send_html(200,self.page('Account confirmed','<div class="notice">Your email is confirmed. <a href="/login">Log in</a>.</div>'))
         elif path == '/mfa':
             if not self.pending_user_id or self.user:
                 return self.error(403, 'No pending two-factor challenge.')
-            body = '<div class="panel"><p>Enter the 6-digit code from your authenticator app.</p><form method="post" action="/mfa">'+self.csrf_field()+'<label>Code</label><input name="code" pattern="[0-9]{6}" required maxlength="6" autocomplete="one-time-code"><button>Verify and sign in</button></form></div>'
+            body = ('<div class="panel"><p>Enter the 6-digit code from your authenticator app, or a recovery code.</p>'
+                    '<form method="post" action="/mfa">'+self.csrf_field()+
+                    '<label>Code</label><input name="code" required maxlength="9" autocomplete="one-time-code">'
+                    '<button>Verify and sign in</button></form>'
+                    '<p><small>Lost your authenticator? Use one of your recovery codes (format ABCD-EF12).</small></p></div>')
             self.send_html(200,self.page('Two-factor verification',body))
+        elif path == '/mfa/recovery':
+            if not self.must_login(): return
+            if not self.user['totp_secret']: return self.error(403,'Enable authenticator MFA first.')
+            remaining = c.execute('SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id=?',(self.user['id'],)).fetchone()['n']
+            body = ('<div class="panel"><p>Recovery codes remaining: <strong>'+str(remaining)+'</strong></p>'
+                    '<p>Regenerating replaces all unused codes.</p>'
+                    '<form method="post" action="/mfa/recovery">'+self.csrf_field()+
+                    '<label>Confirm your account password</label><input type="password" required name="password" autocomplete="current-password">'
+                    '<button>Generate new recovery codes</button></form></div>')
+            self.send_html(200,self.page('Recovery codes',body))
         elif path == '/mfa/setup':
             if not self.must_login(): return
             if self.user['totp_secret']:
@@ -578,7 +678,8 @@ class App(BaseHTTPRequestHandler):
             if not self.must_login(): return
             rows = self.cart_rows(c)
             subtotal = sum(r['price_cents']*r['qty'] for r in rows)
-            body = '<div class="panel"><p>Subtotal: <strong>'+money(subtotal)+'</strong></p><p>Available store credit: '+money(self.user['credit_cents'])+'</p><form method="post" action="/checkout">'+self.csrf_field()+'<label>Coupon code (optional)</label><input name="coupon" maxlength="40"><button>Pay with store credit</button></form><p><small>Totals, discount, stock, and balance are verified on the server during checkout.</small></p></div>'
+            checkout_key = secrets.token_urlsafe(16)
+            body = '<div class="panel"><p>Subtotal: <strong>'+money(subtotal)+'</strong></p><p>Available store credit: '+money(self.user['credit_cents'])+'</p><form method="post" action="/checkout">'+self.csrf_field()+'<input type="hidden" name="key" value="'+checkout_key+'"><label>Coupon code (optional)</label><input name="coupon" maxlength="40"><button>Pay with store credit</button></form><p><small>Totals, discount, stock, and balance are verified on the server during checkout.</small></p></div>'
             self.send_html(200,self.page('Checkout',body))
         elif path == '/account':
             if not self.must_login(): return
@@ -628,6 +729,14 @@ class App(BaseHTTPRequestHandler):
         else:
             self.error(404,'Page not found.')
 
+    def recovery_codes_panel(self, codes, enabled=False):
+        items = ''.join('<li><strong>' + escape(code) + '</strong></li>' for code in codes)
+        return ('<div class="panel">' + ('<h2>MFA: Enabled</h2>' if enabled else '<h2>New recovery codes</h2>') +
+                '<p>Save these 8 single-use recovery codes now. Each works once if you lose your '
+                'authenticator. They are stored only as hashes and <strong>will not be shown again</strong>.</p>'
+                '<ul>' + items + '</ul>'
+                '<p><a class="btn" href="/account">Done</a></p></div>')
+
     def cart_rows(self, c):
         return c.execute('SELECT carts.product_id,carts.qty,products.name,products.price_cents,products.stock,products.active FROM carts JOIN products ON products.id=carts.product_id WHERE carts.session_hash=? ORDER BY products.id',(self.sid_hash,)).fetchall()
 
@@ -636,28 +745,41 @@ class App(BaseHTTPRequestHandler):
             email = d.get('email','').strip().lower(); name = d.get('name','').strip(); password = d.get('password','')
             if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email)>254 or not (1<=len(name)<=80) or not (12<=len(password)<=128):
                 raise ValueError('Enter a valid name/email and a password of 12–128 characters.')
-            try:
-                with transaction(c):
-                    cur = c.execute('INSERT INTO users(email,display_name,password_hash) VALUES(?,?,?)',(email,name,hash_password(password)))
-                    token = secrets.token_urlsafe(32)
-                    c.execute('INSERT INTO confirmations(token_hash,user_id,expires_at) VALUES(?,?,?)',(token_hash(token),cur.lastrowid,int(time.time())+3600))
-            except sqlite3.IntegrityError:
-                return self.error(409,'This email cannot be registered.')
+            if not ip_budget(c, 'register', self.client_address[0]):
+                return self.error(429,'Too many registrations. Try again later.')
+            token = secrets.token_urlsafe(32)
+            with transaction(c):
+                existing=c.execute('SELECT id,confirmed FROM users WHERE email=?',(email,)).fetchone()
+                if existing and existing['confirmed']:
+                    # Keep the response uniform and do not disturb an active account.
+                    c.execute('DELETE FROM pending_registrations WHERE email=?',(email,))
+                    token=None
+                else:
+                    if existing:
+                        # Remove legacy unconfirmed reservations before replacing them
+                        # with an ownership-pending registration.
+                        c.execute('DELETE FROM users WHERE id=?',(existing['id'],))
+                    c.execute('INSERT INTO pending_registrations(email,display_name,password_hash,token_hash,expires_at) VALUES(?,?,?,?,?) '
+                              'ON CONFLICT(email) DO UPDATE SET display_name=excluded.display_name,password_hash=excluded.password_hash,token_hash=excluded.token_hash,expires_at=excluded.expires_at',
+                              (email,name,hash_password(password),token_hash(token),int(time.time())+3600))
+            if token is None:
+                self.send_html(200,self.page('Registration submitted','<div class="notice">If the email can be registered, a confirmation link was sent. In this local development environment, confirmation links are printed to the server terminal.</div>'))
+                return
             # Local demo only: log verification URL, never publish this pattern for production.
             print('DEVELOPMENT CONFIRMATION LINK: http://%s:%s/confirm?token=%s' % (HOST,PORT,token), flush=True)
-            self.send_html(200,self.page('Registration submitted','<div class="notice">Account created. For this local development environment, get your confirmation link from the server terminal, then log in.</div>'))
+            self.send_html(200,self.page('Registration submitted','<div class="notice">If the email can be registered, a confirmation link was sent. In this local development environment, confirmation links are printed to the server terminal.</div>'))
         elif path == '/login':
             email = d.get('email','').strip().lower(); password = d.get('password','')
             if len(email)>254: raise ValueError('Invalid email length.')
             key = token_hash(self.client_address[0]+'|'+email)
-            cutoff = int(time.time())-600
-            c.execute('DELETE FROM login_attempts WHERE at<?',(cutoff,))
-            attempts = c.execute('SELECT count(*) AS n FROM login_attempts WHERE key_hash=? AND at>?',(key,cutoff)).fetchone()['n']
-            if attempts >= 5:
+            if not reserve_attempt(c, key):
                 return self.error(429,'Too many attempts. Try again later.')
             u = c.execute('SELECT * FROM users WHERE email=?',(email,)).fetchone()
-            if not u or not verify_password(password,u['password_hash']) or not u['confirmed']:
-                c.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)',(key,int(time.time())))
+            # Always run Argon2 (even for unknown emails) so response timing
+            # does not reveal whether an account exists.
+            stored_hash = u['password_hash'] if u else DUMMY_PASSWORD_HASH
+            password_ok = verify_password(password,stored_hash)
+            if not u or not password_ok or not u['confirmed']:
                 audit_event(c, 'login_failed')
                 return self.error(401,'Invalid credentials or unconfirmed account.')
             profile=c.execute('SELECT samples FROM behavior_profiles WHERE user_id=?',(u['id'],)).fetchone()
@@ -688,22 +810,52 @@ class App(BaseHTTPRequestHandler):
             u=c.execute('SELECT id,totp_secret,totp_last_step FROM users WHERE id=?',(self.pending_user_id,)).fetchone()
             if not u or not u['totp_secret']: return self.error(403,'Invalid MFA session.')
             key=token_hash('mfa|'+str(u['id']))
-            cutoff=int(time.time())-600
-            c.execute('DELETE FROM login_attempts WHERE at<?',(cutoff,))
-            failures=c.execute('SELECT count(*) AS n FROM login_attempts WHERE key_hash=? AND at>?',(key,cutoff)).fetchone()['n']
-            if failures>=5:return self.error(429,'Too many MFA attempts.')
-            step=match_totp_step(u['totp_secret'],d.get('code',''))
-            if step is None or step<=u['totp_last_step']:
-                c.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)',(key,int(time.time())))
-                audit_event(c, 'mfa_failed', u['id'])
-                return self.error(401,'Invalid or already used security code.')
+            now=int(time.time())
+            locked_until=0
+            blocked=False
+            failed=False
+            recovery=False
             with transaction(c):
-                updated=c.execute('UPDATE users SET totp_last_step=? WHERE id=? AND totp_last_step<?',(step,u['id'],step)).rowcount
-                if updated!=1: raise ValueError('Security code already used.')
-                c.execute('DELETE FROM login_attempts WHERE key_hash=?',(key,))
-                audit_event(c, 'mfa_success', u['id'])
-                if not (RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone()):
-                    audit_event(c, 'login_success', u['id'])
+                state=c.execute('SELECT failures,locked_until FROM mfa_throttles WHERE user_id=?',(u['id'],)).fetchone()
+                if state and state['locked_until']>now:
+                    locked_until=state['locked_until']
+                    blocked=True
+                else:
+                    current=c.execute('SELECT totp_secret,totp_last_step FROM users WHERE id=?',(u['id'],)).fetchone()
+                    supplied = d.get('code','').strip().upper()
+                    recovery = bool(re.fullmatch(r'[A-F0-9]{4}-[A-F0-9]{4}',supplied))
+                    if recovery:
+                        ok = c.execute('DELETE FROM recovery_codes WHERE user_id=? AND code_hash=?',
+                                       (u['id'],token_hash(supplied))).rowcount == 1
+                        step = None
+                    else:
+                        step = match_totp_step(current['totp_secret'],supplied)
+                        ok = step is not None and step > current['totp_last_step']
+                    if not ok:
+                        failures=(state['failures'] if state else 0)+1
+                        lock_seconds=mfa_lock_seconds(failures)
+                        locked_until=now+lock_seconds if lock_seconds else 0
+                        c.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
+                                  'ON CONFLICT(user_id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until,last_failure_at=excluded.last_failure_at',
+                                  (u['id'],failures,locked_until,now))
+                        c.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)',(key,now))
+                        audit_event(c, 'mfa_failed', u['id'])
+                        failed=True
+                    else:
+                        if not recovery:
+                            updated=c.execute('UPDATE users SET totp_last_step=? WHERE id=? AND totp_last_step<?',(step,u['id'],step)).rowcount
+                            if updated!=1: raise ValueError('Security code already used.')
+                        c.execute('DELETE FROM login_attempts WHERE key_hash=?',(key,))
+                        c.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
+                                  'ON CONFLICT(user_id) DO UPDATE SET failures=0,locked_until=0,last_failure_at=0',
+                                  (u['id'],0,0,0))
+                        audit_event(c, 'mfa_recovery_used' if recovery else 'mfa_success', u['id'])
+                        if not (RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone()):
+                            audit_event(c, 'login_success', u['id'])
+            if blocked:
+                return self.error(429,'Too many MFA attempts. Try again later.')
+            if failed:
+                return self.error(401,'Invalid or already used security code.')
             if RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone():
                 self.redirect('/passkey/login',self.rotate_session(c,pending_passkey_id=u['id']))
             else:
@@ -719,8 +871,18 @@ class App(BaseHTTPRequestHandler):
             with transaction(c):
                 c.execute('UPDATE users SET totp_secret=?,totp_last_step=? WHERE id=? AND totp_secret IS NULL',(enrollment['secret'],step,self.user['id']))
                 c.execute('DELETE FROM mfa_enrollments WHERE session_hash=?',(self.sid_hash,))
+                codes = issue_recovery_codes(c, self.user['id'])
                 audit_event(c, 'mfa_enabled', self.user['id'])
-            self.redirect('/account')
+            self.send_html(200,self.page('Recovery codes',self.recovery_codes_panel(codes,enabled=True)))
+        elif path == '/mfa/recovery':
+            if not self.must_login(): return
+            if not self.user['totp_secret']: return self.error(403,'Enable authenticator MFA first.')
+            if not verify_password(d.get('password',''),self.user['password_hash']):
+                return self.error(403,'Password not verified.')
+            with transaction(c):
+                codes = issue_recovery_codes(c, self.user['id'])
+                audit_event(c, 'mfa_recovery_regenerated', self.user['id'])
+            self.send_html(200,self.page('Recovery codes',self.recovery_codes_panel(codes)))
         elif path == '/security/behavior':
             if not self.must_login(): return
             if not verify_password(d.get('password',''),self.user['password_hash']):
@@ -779,10 +941,14 @@ class App(BaseHTTPRequestHandler):
         elif path == '/passkey/auth/finish':
             if not self.user and not self.pending_passkey_id: return self.send_json(403,{'error':'Sign in first'})
             candidate_id = self.user['id'] if self.user else self.pending_passkey_id
-            pending=c.execute('SELECT * FROM passkey_challenges WHERE session_hash=? AND purpose=? AND expires_at>?',
-                (self.sid_hash,'verify',int(time.time()))).fetchone()
-            if not pending: return self.send_json(403,{'error':'Challenge expired'})
-            c.execute('DELETE FROM passkey_challenges WHERE session_hash=?',(self.sid_hash,))
+            now=int(time.time())
+            with transaction(c):
+                pending=c.execute('SELECT * FROM passkey_challenges WHERE session_hash=? AND purpose=? AND expires_at>?',
+                    (self.sid_hash,'verify',now)).fetchone()
+                if not pending: return self.send_json(403,{'error':'Challenge expired'})
+                claimed=c.execute('DELETE FROM passkey_challenges WHERE session_hash=? AND challenge=? AND purpose=? AND expires_at>? ',
+                                  (self.sid_hash,pending['challenge'],'verify',now)).rowcount
+                if claimed != 1: return self.send_json(403,{'error':'Challenge expired'})
             try:
                 credential=json.loads(d.get('credential',''))
                 raw_id=credential['rawId']
@@ -792,21 +958,26 @@ class App(BaseHTTPRequestHandler):
                 if rp not in ('127.0.0.1','localhost'): raise ValueError('Loopback only')
                 count=verify_assertion(credential,pending['challenge'],'http://localhost:'+str(PORT),rp,
                                        key['credential_id'],key['public_key'],key['sign_count'])
-                with transaction(c):
-                    c.execute('UPDATE passkeys SET sign_count=? WHERE credential_id=?',(count,key['credential_id']))
-                    audit_event(c,'passkey_verified',candidate_id)
-                # Note: browser geolocation is a self-reported risk indicator, not verified location.
                 lat=float(d.get('lat','nan')); lon=float(d.get('lon','nan'))
                 allowed,reason,distance=location_time_result(lat,lon,30.0444,31.2357)
-                if not allowed:
-                    audit_event(c,'risk_'+reason+'_denied',candidate_id)
-                    return self.send_json(403,{'error':'Security policy denied ('+reason+'). Browser location is not trusted proof.'})
                 cookies=None
-                if self.pending_passkey_id:
-                    audit_event(c,'login_success',candidate_id)
-                    cookies=self.rotate_session(c,user_id=candidate_id)
-                return self.send_json(200,{'message':'Security policy approved: authentic passkey + local hours + location policy',
+                with transaction(c):
+                    updated=c.execute('UPDATE passkeys SET sign_count=? WHERE credential_id=? AND sign_count=?',
+                                      (count,key['credential_id'],key['sign_count'])).rowcount
+                    if updated != 1: raise ValueError('Credential counter did not advance.')
+                    audit_event(c,'passkey_verified',candidate_id)
+                    if not allowed:
+                        audit_event(c,'risk_'+reason+'_denied',candidate_id)
+                    elif self.pending_passkey_id:
+                        audit_event(c,'login_success',candidate_id)
+                        cookies=self.rotate_session(c,user_id=candidate_id)
+                if not allowed:
+                    return self.send_json(403,{'error':'Security policy denied ('+reason+'). Browser location is not trusted proof.'})
+                if cookies:
+                    return self.send_json(200,{'message':'Security policy approved: authentic passkey + local hours + location policy',
                                            'distance_km':round(distance,2), 'login_complete':bool(cookies)},cookies=cookies)
+                return self.send_json(200,{'message':'Security policy approved: authentic passkey + local hours + location policy',
+                                           'distance_km':round(distance,2), 'login_complete':False})
             except (ValueError,KeyError,TypeError,OverflowError,sqlite3.Error):
                 audit_event(c,'passkey_rejected',candidate_id)
                 return self.send_json(403,{'error':'Passkey verification or location failed'})
@@ -839,29 +1010,35 @@ class App(BaseHTTPRequestHandler):
             if not self.must_login(): return
             code = d.get('coupon','').strip().upper()
             if len(code)>40: raise ValueError('Invalid coupon.')
+            key = d.get('key','')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{10,80}',key): raise ValueError('Invalid checkout key. Reload the checkout page.')
             with transaction(c):
-                rows = self.cart_rows(c)
-                if not rows: raise ValueError('Cart is empty.')
-                if any(not r['active'] or r['qty']>r['stock'] for r in rows): raise ValueError('A product is unavailable. Please update cart.')
-                subtotal = sum(r['price_cents']*r['qty'] for r in rows)
-                coupon = None; discount = 0
-                if code:
-                    coupon = c.execute('SELECT * FROM coupons WHERE code=? AND active=1',(code,)).fetchone()
-                    if not coupon: raise ValueError('Coupon invalid or inactive.')
-                    if c.execute('SELECT 1 FROM coupon_uses WHERE user_id=? AND coupon_id=?',(self.user['id'],coupon['id'])).fetchone():
-                        raise ValueError('Coupon already used.')
-                    discount = subtotal*coupon['percent_off']//100
-                total = subtotal-discount
-                account = c.execute('SELECT credit_cents FROM users WHERE id=?',(self.user['id'],)).fetchone()
-                if account['credit_cents'] < total: raise ValueError('Insufficient store credit.')
-                c.execute('UPDATE users SET credit_cents=credit_cents-? WHERE id=?',(total,self.user['id']))
-                order_id = c.execute('INSERT INTO orders(user_id,total_cents,discount_cents,created_at) VALUES(?,?,?,?)',(self.user['id'],total,discount,int(time.time()))).lastrowid
-                for r in rows:
-                    c.execute('UPDATE products SET stock=stock-? WHERE id=?',(r['qty'],r['product_id']))
-                    c.execute('INSERT INTO order_items(order_id,product_id,name_snapshot,unit_price_cents,qty) VALUES(?,?,?,?,?)',(order_id,r['product_id'],r['name'],r['price_cents'],r['qty']))
-                if coupon: c.execute('INSERT INTO coupon_uses(user_id,coupon_id) VALUES(?,?)',(self.user['id'],coupon['id']))
-                c.execute('DELETE FROM carts WHERE session_hash=?',(self.sid_hash,))
-                audit_event(c, 'checkout_complete', self.user['id'], 'order', order_id)
+                existing = c.execute('SELECT id FROM orders WHERE user_id=? AND idempotency_key=?',(self.user['id'],key)).fetchone()
+                if existing:
+                    order_id = existing['id']  # replayed submit returns the same receipt; no second debit
+                else:
+                    rows = self.cart_rows(c)
+                    if not rows: raise ValueError('Cart is empty.')
+                    if any(not r['active'] or r['qty']>r['stock'] for r in rows): raise ValueError('A product is unavailable. Please update cart.')
+                    subtotal = sum(r['price_cents']*r['qty'] for r in rows)
+                    coupon = None; discount = 0
+                    if code:
+                        coupon = c.execute('SELECT * FROM coupons WHERE code=? AND active=1',(code,)).fetchone()
+                        if not coupon: raise ValueError('Coupon invalid or inactive.')
+                        if c.execute('SELECT 1 FROM coupon_uses WHERE user_id=? AND coupon_id=?',(self.user['id'],coupon['id'])).fetchone():
+                            raise ValueError('Coupon already used.')
+                        discount = subtotal*coupon['percent_off']//100
+                    total = subtotal-discount
+                    account = c.execute('SELECT credit_cents FROM users WHERE id=?',(self.user['id'],)).fetchone()
+                    if account['credit_cents'] < total: raise ValueError('Insufficient store credit.')
+                    c.execute('UPDATE users SET credit_cents=credit_cents-? WHERE id=?',(total,self.user['id']))
+                    order_id = c.execute('INSERT INTO orders(user_id,total_cents,discount_cents,created_at,idempotency_key) VALUES(?,?,?,?,?)',(self.user['id'],total,discount,int(time.time()),key)).lastrowid
+                    for r in rows:
+                        c.execute('UPDATE products SET stock=stock-? WHERE id=?',(r['qty'],r['product_id']))
+                        c.execute('INSERT INTO order_items(order_id,product_id,name_snapshot,unit_price_cents,qty) VALUES(?,?,?,?,?)',(order_id,r['product_id'],r['name'],r['price_cents'],r['qty']))
+                    if coupon: c.execute('INSERT INTO coupon_uses(user_id,coupon_id) VALUES(?,?)',(self.user['id'],coupon['id']))
+                    c.execute('DELETE FROM carts WHERE session_hash=?',(self.sid_hash,))
+                    audit_event(c, 'checkout_complete', self.user['id'], 'order', order_id)
             self.redirect('/order/'+str(order_id))
         elif path == '/account':
             if not self.must_login(): return
@@ -872,15 +1049,19 @@ class App(BaseHTTPRequestHandler):
         elif path == '/newsletter':
             email = d.get('email','').strip().lower()
             if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254: raise ValueError('Invalid email.')
+            if not ip_budget(c, 'newsletter', self.client_address[0]):
+                return self.error(429,'Too many subscriptions. Try again later.')
             existing = c.execute('SELECT coupon_id FROM newsletters WHERE email=?',(email,)).fetchone()
-            if existing:
-                self.send_html(200,self.page('Newsletter','<div class="notice">This email is already subscribed. Check your original coupon.</div>'))
-                return
-            code = 'NEWS-'+secrets.token_hex(6).upper()
-            with transaction(c):
-                cp_id = c.execute('INSERT INTO coupons(code,percent_off) VALUES(?,10)',(code,)).lastrowid
-                c.execute('INSERT INTO newsletters(email,coupon_id) VALUES(?,?)',(email,cp_id))
-            self.send_html(200,self.page('Newsletter coupon','<div class="notice">Development demo coupon: <strong>'+escape(code)+'</strong>. Save this code for checkout.</div>'))
+            if not existing:
+                code = 'NEWS-'+secrets.token_hex(6).upper()
+                with transaction(c):
+                    cp_id = c.execute('INSERT INTO coupons(code,percent_off) VALUES(?,10)',(code,)).lastrowid
+                    c.execute('INSERT INTO newsletters(email,coupon_id) VALUES(?,?)',(email,cp_id))
+                # Coupons must never be shown to whoever submits a form: only the
+                # mailbox owner may learn the code. Local dev prints to the
+                # server terminal like the confirmation link; production email.
+                print('DEVELOPMENT NEWSLETTER COUPON for %s: %s' % (email,code), flush=True)
+            self.send_html(200,self.page('Newsletter','<div class="notice">If this email is new to our list, your one-time 10% coupon was sent to it. In this local development environment, it is printed to the server terminal.</div>'))
         elif path == '/admin/product':
             if not self.must_admin(): return
             name=d.get('name','').strip(); desc=d.get('description','').strip()

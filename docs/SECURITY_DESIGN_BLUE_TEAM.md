@@ -38,11 +38,11 @@ The application is a Python ThreadingHTTPServer + SQLite secure-commerce educati
 ## 5. STRIDE (representative threats)
 | Category | Threat | Mitigation in project | Remaining risk |
 |---|---|---|---|
-| Spoofing | Password stolen and account login | Argon2id password hashing, TOTP with bound pending-user session, optional WebAuthn ES256 challenge | MFA recovery not designed; rate limits simplistic |
+| Spoofing | Password stolen and account login | Argon2id password hashing, TOTP with bound pending-user session, hashed single-use recovery codes, durable per-user MFA lockout, optional WebAuthn ES256 challenge | Password limit remains keyed by direct peer IP+email; distributed spray controls need deployment support |
 | Tampering | Client changes price, quantity, role or coupon | Read price from DB, positive qty, transaction validation, role authorization | Concurrency and full mutation fuzz tests pending |
 | Repudiation | Admin denies catalog changes | Allowlisted persistent audit events with actor ID and time | Local SQLite admin can modify audit; retention policy absent |
 | Information disclosure | Other user's order exposed | User-owned order query, server-side session checks | Further privacy tests required |
-| Denial of Service | Repeated password attempts or large POST body | Attempt threshold, size and field count caps | No reverse proxy/WAF; per-IP distributed abuse untested |
+| Denial of Service | Repeated password attempts or large POST body | Atomic pre-hash attempt reservation, durable MFA lockout, size and field count caps | No reverse proxy/WAF; distributed abuse controls remain deployment work |
 | Elevation of privilege | Customer accesses /admin | Server-side role check on all admin handlers | More mutation coverage recommended |
 
 ## 6. Attack scenario to defense matrix
@@ -65,10 +65,10 @@ The application is a Python ThreadingHTTPServer + SQLite secure-commerce educati
 
 ## 7. Authentication and second-factor design
 - **Password**: Argon2id via argon2-cffi with salted hash; no plaintext storage.
-- **Account confirmation**: one-time hashed token, expiration; development-only link logged to local terminal. Email delivery is not implemented.
-- **TOTP**: SHA-1 HMAC 30s, six digits, ±1 step window, persisted monotonic last accepted step to reject replay. Pending login identity is read from server-side session, not form fields.
+- **Account confirmation**: short-lived hashed token in `pending_registrations`; confirmation atomically promotes the pending record into `users`, so an unverified email never occupies an active-user row. Development-only link is logged to the local terminal. Email delivery is not implemented.
+- **TOTP**: SHA-1 HMAC 30s, six digits, ±1 step window, persisted monotonic last accepted step to reject replay, and a per-user durable escalating lockout after each five failures. Pending login identity is read from server-side session, not form fields.
 - **Behavioral anomaly**: Five successful password-backed typing enrollment samples, feature vector `{speed,gap_1..gap_5}`; per-feature mean and population standard deviation (floor to reduce false positives), average absolute z-score >3.0 creates audit event. Raw keys not stored. Browser timings are forgeable; cannot replace MFA or passkey.
-- **WebAuthn**: Registration after password re-verification by logged-in user; challenge stored for 180 seconds keyed to session; browser credential uses user-verification and user-presence flags; server accepts only ES256/P-256 / fmt none, checks rpIdHash, type, exact challenge, expected origin, signature and monotonic sign counter. Authorization remains server-side. Demo intentionally limited to localhost and current device support.
+- **WebAuthn**: Registration after password re-verification by logged-in user; challenge stored for 180 seconds keyed to session and atomically claimed; browser credential uses user-verification and user-presence flags; server accepts only ES256/P-256 / fmt none, checks rpIdHash, type, exact challenge, expected origin, signature and compare-and-swap sign counter. Authenticated session rotation is in the same transaction as the counter update. Authorization remains server-side. Demo intentionally limited to localhost and current device support.
 - **risk gate**: Optional `SECURESHOP_RISK_GATE_ENFORCE=1` makes users who registered passkeys finish login with passkey signature + location/time checks. By default, /security contains a nonblocking demo check to avoid unintentional lockout. Clock is Africa/Cairo, allowed [08:00,22:00). Home is an illustrative Cairo landmark and not an actual user residence. This is not GPS attestation.
 
 ## 8. Input and business-logic enforcement
@@ -78,21 +78,30 @@ Every POST requires session CSRF secret and bounded urlencoded form. Cart quanti
 Audit records use allowlisted event names, numeric actor and target IDs, server timestamps. No passwords, OTPs, TOTP seeds, confirmation tokens, location coordinates or raw keystrokes are logged. Behavioral profile contains only quantized timing features retained while the account exists. This data deserves explicit consent, minimization, erasure and retention policies before real-world use. Debug logs can still expose local confirmation links; never use this in production.
 
 ## 10. Testing strategy and evidence
-- Automated: `python -m unittest discover -s tests -v` (35 tests OK in isolated environment at build time).
+- Automated: `python -m unittest discover -s tests -v` (46 tests OK in an isolated disposable database after F1–F4 remediation).
 - Functional smoke test: User and Admin browser sessions, initial login through checkout, product edits, newsletter, store credit and order history.
 - Security negative cases: price tampering, coupon reuse, empty cart, insufficient balance, missing CSRF, role restriction, IDOR, MFA account binding/replay, suspicious timing, out-of-policy location/time, invalid WebAuthn challenge/signature.
-- Outstanding: Manual real-device passkey registration/authentication; concurrent race stress testing; broad SAST/DAST with course-approved tooling; isolated naive-app comparisons; Red Team report and remediations; browser/OS compatibility validation.
+- Outstanding: Manual real-device passkey registration/authentication; broad SAST/DAST with course-approved tooling; browser/OS compatibility validation; distributed rate-limit and load testing.
 
 ## 11. Deployment limitations
-This is a localhost educational prototype. No formal key management/HSM, email verification service, HTTPS termination, CSP nonce strategy, WAF, centralized audit retention, trusted location attestation, backup/MFA recovery or production WebAuthn package integration. Student team should not expose the built-in Python server to internet or use real payment data. Do not pretend optional Location and time policy policy is enforced when the flag is off.
+This is a localhost educational prototype. No formal key management/HSM, email verification service, HTTPS termination, CSP nonce strategy, WAF, centralized audit retention, trusted location attestation, or production WebAuthn package integration. Student team should not expose the built-in Python server to internet or use real payment data. Do not pretend optional Location and time policy policy is enforced when the flag is off.
+
+## Hardening-branch additions (feature/secure-shop-hardening)
+- **Checkout idempotency:** `orders.idempotency_key` UNIQUE per user; GET `/checkout` mints a one-time key into the form; replayed submits return the same receipt without a second debit (`test_checkout_replay_returns_same_order_no_second_debit`).
+- **MFA recovery codes:** 8 codes shown once at TOTP enrollment, SHA-256 digests only in `recovery_codes`, single-use DELETE on redemption, password-gated regeneration at `/mfa/recovery` (`test_recovery_code_single_use_login`, `test_recovery_regeneration_replaces_old_set`).
+- **Account-enumeration closures:** `/login` verifies `DUMMY_PASSWORD_HASH` for unknown emails (timing parity); `/register` returns the identical page for taken emails (status + body) and issues no token.
+- **Newsletter coupon harvesting closed:** codes are never rendered to the submitter; delivery follows the dev-console outbox model, with a uniform response whether or not the email was already subscribed (`test_newsletter_never_displays_coupon_to_submitter`).
+- **Real-HTTP naive comparison:** `naive_lab.py` (loopback-only, disposable DB) + `scripts/security_compare.py` produce 10 matched attack/defense transcripts under `evidence/` (10/10 defended).
+- **Final independent remediation:** F1 durable MFA lockout, F2 atomic login reservation, F3 pending registration records, and F4 atomic WebAuthn challenge claim were independently reproduced before and after the patch. The after-run included concurrent HTTP checks for F2 and F4; details are in `docs/REMEDIATION_REPORT.md`.
+- **Pinned dependencies** (`requirements.txt` exact versions) and `docs/ARCHITECTURE.md`, `docs/ATTACK_EVIDENCE.md`, `docs/DEMO_SCRIPT.md`, `docs/QA_PREP.md`, `docs/THIRD_PARTY_CREDITS.md` added.
 
 ## 12. Next evidence before final submission
 1. Collect redacted browser screenshots of UI and security denials.
-2. Red Team performs authorized local tests and records findings with severity, exact requests and remediation status.
-3. Fix valid findings and repeat automated and manual testing.
+2. Repeat real-device passkey and browser walkthroughs on the final demo environment.
+3. Keep the F1–F4 remediation evidence and commit reference with the course submission.
 4. Complete Git commits from all members, README architecture and 10–15 minute demo/Q&A rehearsals.
 5. Cite any reused modules, standards, documentation and assistance per course academic integrity policy.
 
 
 ## Appendix: Verification revision
-The final test build validates WebAuthn `rp.id=localhost`, `rpId=localhost`, and origin `http://localhost:8000` together. It rejects invalid signature and stale challenges and tests time/location decision branches through HTTP with deterministic synthetic coordinates and fixed server time. The automated suite has 35 passing cases in its isolated build environment; it does not replace an independent security review. See `TEST_RESULTS.md`, `FINAL_TEST_EVIDENCE_AR.md`, and `RED_TEAM_TRACKER_AR.md`.
+The final test build validates WebAuthn `rp.id=localhost`, `rpId=localhost`, and origin `http://localhost:8000` together. It rejects invalid signature and stale challenges, atomically consumes concurrent assertions, and tests time/location decision branches through HTTP with deterministic synthetic coordinates and fixed server time. The automated suite has 46 passing cases after the independent F1–F4 remediation. See `TEST_RESULTS.md`, `SECURITY_COVERAGE.md`, and `REMEDIATION_REPORT.md`.

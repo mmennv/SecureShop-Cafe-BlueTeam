@@ -1,0 +1,18 @@
+SecureShop Café independent remediation retest
+Database: fresh disposable SQLite files under /tmp; main project databases were not opened.
+HTTP servers: loopback-only ThreadingHTTPServer instances.
+
+F1 durable MFA lockout
+first_window=[401, 401, 401, 401, 401], sixth=429, next_window=[429, 429, 429, 429, 429]
+
+F2 atomic concurrent password reservation
+statuses=[401, 401, 401, 401, 401, 429, 429, 429], recorded_attempts=5
+
+F3 pending registration
+first_status=200, second_status=200, identical_body=True, confirmed=None,
+pending_display_name=Owner, attacker_password_valid=False, owner_password_valid=True.
+No users row exists before confirmation.
+
+F4 atomic WebAuthn assertion claim
+Across 12 rounds of eight concurrent copies, multiple_successes=0. Every round had
+at most one 200 response; replay requests returned 403.

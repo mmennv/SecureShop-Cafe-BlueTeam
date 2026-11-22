@@ -1,0 +1,49 @@
+=== sqli-search: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : 1 Latte 2500<br>2 Croissant 1500
+  secure: <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#faf6f0"><meta name="description" conte
+  note  : naive concatenates q into LIKE; secure uses bound parameters
+
+=== price-tampering: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : order 1 total 1
+  secure: order total_cents=2499
+  note  : naive trusts POSTed total; secure recomputes from products.price_cents
+
+=== checkout-replay: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : orders 2->3 on repost
+  secure: status=303 location=/order/1 orders=1 credit=7501
+  note  : naive debits every POST; secure replays return the same receipt, no second debit
+
+=== idor-order: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : order 1 user 1 total 1
+  secure: status=404
+  note  : naive has no owner check; secure scopes the query to session user
+
+=== admin-no-role: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : alice@test:alicepw123
+  secure: status=403
+  note  : naive dumps user table incl. plaintext passwords; secure requires admin role
+
+=== csrf-profile: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : posted without csrf token, accepted
+  secure: status=403
+  note  : naive accepts cookie-authenticated POST w/o token; secure rejects (403)
+
+=== coupon-reuse: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : order 5 total 2250
+  secure: status=400 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport"
+  note  : naive coupons are reusable; secure enforces coupon_uses PK
+
+=== newsletter-harvest: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : your coupon: NAIVE-ATTACKER
+  secure: <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-sc
+  note  : naive returns the code to anyone; secure sends it only to the mailbox
+
+=== session-token: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : sid=fixed-token-1; Path=/
+  secure: sid=<redacted>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800
+  note  : naive: predictable id, no flags; secure: random token, HttpOnly+SameSite
+
+=== negative-qty: NAIVE VULNERABLE / SECURE DEFENDED
+  naive : cart qty=-5
+  secure: status=400
+  note  : naive stores negative qty; secure validates positive_int + CHECK

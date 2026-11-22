@@ -1,0 +1,525 @@
+{
+  "secure_log": [
+    {
+      "method": "GET",
+      "path": "/",
+      "fields": [],
+      "status": 303,
+      "body": "",
+      "set_cookie": "sid=<redacted>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800"
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "fields": [
+        "csrf",
+        "email",
+        "password"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": "sid=<redacted>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800"
+    },
+    {
+      "method": "GET",
+      "path": "/?q=%27%20OR%201%3D1--",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Our Menu | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/securi",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Our Menu | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/securi",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "fields": [
+        "csrf",
+        "email",
+        "password"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": "sid=<redacted>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800"
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "csrf",
+        "product_id",
+        "qty"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/checkout",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Checkout | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/securi",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "csrf",
+        "key"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "csrf",
+        "product_id",
+        "qty"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "csrf",
+        "key"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/admin",
+      "fields": [],
+      "status": 403,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Request not completed | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/account",
+      "fields": [
+        "name"
+      ],
+      "status": 403,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Request not completed | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "csrf",
+        "product_id",
+        "qty"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/checkout",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Checkout | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/securi",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "csrf",
+        "key"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "csrf",
+        "product_id",
+        "qty"
+      ],
+      "status": 303,
+      "body": "",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/checkout",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Checkout | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/securi",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "csrf",
+        "key"
+      ],
+      "status": 400,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Request not completed | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/newsletter",
+      "fields": [
+        "csrf",
+        "email"
+      ],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Newsletter | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/secu",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "fields": [],
+      "status": 200,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Login | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/static/security.",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "csrf",
+        "product_id",
+        "qty"
+      ],
+      "status": 400,
+      "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" content=\"SecureShop Caf\u00e9 - freshly brewed coffee, iced lattes, and bakery treats.\"><title>Request not completed | SecureShop Caf\u00e9</title><link rel=\"stylesheet\" href=\"/static/style.css\"><script defer src=\"/",
+      "set_cookie": ""
+    }
+  ],
+  "naive_log": [
+    {
+      "method": "GET",
+      "path": "/?q=%27%20OR%201%3D1--",
+      "fields": [],
+      "status": 200,
+      "body": "1 Latte 2500<br>2 Croissant 1500",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "fields": [
+        "email",
+        "password"
+      ],
+      "status": 302,
+      "body": "",
+      "set_cookie": "sid=fixed-token-1; Path=/"
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "total"
+      ],
+      "status": 200,
+      "body": "order 1 total 1",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "product_id",
+        "qty"
+      ],
+      "status": 200,
+      "body": "added",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "total"
+      ],
+      "status": 200,
+      "body": "order 2 total 2500",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "total"
+      ],
+      "status": 200,
+      "body": "order 3 total 2500",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/order/1",
+      "fields": [],
+      "status": 200,
+      "body": "order 1 user 1 total 1",
+      "set_cookie": ""
+    },
+    {
+      "method": "GET",
+      "path": "/admin",
+      "fields": [],
+      "status": 200,
+      "body": "alice@test:alicepw123",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/account",
+      "fields": [
+        "email"
+      ],
+      "status": 200,
+      "body": "updated",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "total"
+      ],
+      "status": 200,
+      "body": "order 4 total 2250",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "fields": [
+        "coupon",
+        "total"
+      ],
+      "status": 200,
+      "body": "order 5 total 2250",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/newsletter",
+      "fields": [
+        "email"
+      ],
+      "status": 200,
+      "body": "your coupon: NAIVE-ATTACKER",
+      "set_cookie": ""
+    },
+    {
+      "method": "POST",
+      "path": "/cart/add",
+      "fields": [
+        "product_id",
+        "qty"
+      ],
+      "status": 200,
+      "body": "added",
+      "set_cookie": ""
+    }
+  ],
+  "results": [
+    {
+      "scenario": "sqli-search",
+      "naive": "1 Latte 2500<br>2 Croissant 1500",
+      "secure": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"theme-color\" content=\"#faf6f0\"><meta name=\"description\" conte",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive concatenates q into LIKE; secure uses bound parameters"
+    },
+    {
+      "scenario": "price-tampering",
+      "naive": "order 1 total 1",
+      "secure": "order total_cents=2499",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive trusts POSTed total; secure recomputes from products.price_cents"
+    },
+    {
+      "scenario": "checkout-replay",
+      "naive": "orders 2->3 on repost",
+      "secure": "status=303 location=/order/1 orders=1 credit=7501",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive debits every POST; secure replays return the same receipt, no second debit"
+    },
+    {
+      "scenario": "idor-order",
+      "naive": "order 1 user 1 total 1",
+      "secure": "status=404",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive has no owner check; secure scopes the query to session user"
+    },
+    {
+      "scenario": "admin-no-role",
+      "naive": "alice@test:alicepw123",
+      "secure": "status=403",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive dumps user table incl. plaintext passwords; secure requires admin role"
+    },
+    {
+      "scenario": "csrf-profile",
+      "naive": "posted without csrf token, accepted",
+      "secure": "status=403",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive accepts cookie-authenticated POST w/o token; secure rejects (403)"
+    },
+    {
+      "scenario": "coupon-reuse",
+      "naive": "order 5 total 2250",
+      "secure": "status=400 <!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\"",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive coupons are reusable; secure enforces coupon_uses PK"
+    },
+    {
+      "scenario": "newsletter-harvest",
+      "naive": "your coupon: NAIVE-ATTACKER",
+      "secure": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-sc",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive returns the code to anyone; secure sends it only to the mailbox"
+    },
+    {
+      "scenario": "session-token",
+      "naive": "sid=fixed-token-1; Path=/",
+      "secure": "sid=<redacted>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive: predictable id, no flags; secure: random token, HttpOnly+SameSite"
+    },
+    {
+      "scenario": "negative-qty",
+      "naive": "cart qty=-5",
+      "secure": "status=400",
+      "naive_vulnerable": true,
+      "secure_defended": true,
+      "note": "naive stores negative qty; secure validates positive_int + CHECK"
+    }
+  ]
+}

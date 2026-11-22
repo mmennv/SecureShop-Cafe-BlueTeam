@@ -1,0 +1,18 @@
+SecureShop Café independent remediation baseline
+Database: fresh disposable SQLite files under /tmp; main project databases were not opened.
+HTTP servers: loopback-only ThreadingHTTPServer instances.
+
+F1 MFA rolling-window bypass
+first_window=[401, 401, 401, 401, 401], sixth=429, next_window=[401, 401, 401, 401, 401]
+
+F2 concurrent password-throttle race
+statuses=[401, 401, 401, 401, 401, 401, 401, 401], recorded_attempts=8
+
+F3 unverified email reservation
+first_status=200, second_status=200, identical_body=True, confirmed=0, confirmations=1,
+attacker_password_valid=True, owner_password_valid=False
+
+F4 concurrent WebAuthn assertion replay
+Eight concurrent copies of one valid assertion produced two successful responses in a
+later round; multiple_successes=2. Each successful response issued a distinct authenticated
+session in the original independent audit.

@@ -1,43 +1,84 @@
 # SecureShop Café — CET431 Blue Team build
 
-Local educational site with customer/admin e-commerce flows, TOTP QR-based MFA, server-side security protections, audit logging, typing anomaly model, and limited real ES256 WebAuthn registration/verification.
+Local educational e-commerce site: customer/admin flows, Argon2id + TOTP MFA
+with recovery codes, limited ES256 WebAuthn, typing-anomaly and location/time
+risk signals, server-side checkout integrity, audit logging — plus a matched
+**naive-vs-secure HTTP evidence harness**.
 
-## Install (Mac)
+## Install
+
 ```sh
-cd ~/Desktop/SecureShop_Cafe_v2
-python3 -m venv .venv
-source .venv/bin/activate
+cd SecureShop-Cafe
+python3 -m venv .venv          # Windows: py -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 python app.py
 ```
-Visit `http://localhost:8000` for all browser tests. Passkeys use RP ID `localhost` and verify origin `http://localhost:8000`; opening the site at `127.0.0.1` instead will not work for passkeys. The server still binds to loopback.
 
-Existing Mac users: DO NOT replace `secureshop.db` or `.venv`. Back them up first. `init_db` migrates tables non-destructively. Avoid restoring from old ZIP without checking account DB contents.
+Open `http://localhost:8000` (passkeys require the `localhost` RP/origin —
+`127.0.0.1` won't work for them, though the app binds to loopback).
 
-Admin creation on an **empty database only** (do not share passwords in reports):
+## Users
+
+- **Customer:** `/register`, then copy the confirmation link printed to the
+  server terminal (this dev build has no real email — terminal = outbox).
+- **Admin** (empty DB only):
+  ```sh
+  export SECURESHOP_ADMIN_EMAIL='admin@example.test'
+  export SECURESHOP_ADMIN_PASSWORD='<a long passphrase>'
+  python app.py
+  ```
+- New accounts start with $100.00 store credit — checkout is credit-only, no
+  card gateway exists.
+
+## Naive vs secure evidence
+
 ```sh
-export SECURESHOP_ADMIN_EMAIL='admin@example.test'
-read -s 'SECURESHOP_ADMIN_PASSWORD?Admin password: '; echo
-export SECURESHOP_ADMIN_PASSWORD
-python app.py
+python app.py                                   # terminal 1 (secure, :8000)
+python naive_lab.py                             # terminal 2 (naive, :5050)
+python scripts/security_compare.py              # terminal 3
+# -> "10/10 scenarios: naive vulnerable, secure defended"
+#    transcripts: evidence/compare_summary.txt, compare_transcripts.json
 ```
-Existing Admin password is NOT overwritten by the environment variable. To create a normal user, use `/register` and the terminal-only development confirmation link. TOTP requires Google/Microsoft Authenticator.
 
-## Routes / architecture
-- `/` catalogue, `/product/<id>` detail, `/cart`, `/checkout`, `/orders`, `/order/<id>` purchase flow.
-- `/register`, `/confirm`, `/login`, `/mfa`, `/mfa/setup`, `/account` customer auth.
-- `/admin` products/users/coupons; `/admin/audit` allowlisted events.
-- `/security` security dashboard, `/security/behavior` five samples, passkey register and risk check.
-- `app.py` HTTP routes, SQLite schema/business rules/CSRF/session control; `auth_security.py` Argon2id/TOTP; `blue_security.py` behavior and place/time math; `passkey_security.py` limited ES256 WebAuthn verification; `security.js` client-only browser APIs; `tests/` integration and unit tests.
-- `SECURESHOP_DB` points to custom SQLite path. Defaults to adjacent `secureshop.db`. Auto-new DB when none exists.
+The compare script provisions its own `compare@example.test` fixture user in
+the app database — run it against a throwaway DB (`SECURESHOP_DB=/tmp/x.db`).
 
-## Optional risk policy login enforcement
-`SECURESHOP_RISK_GATE_ENFORCE=1 python app.py` makes enrolled-passkey users pass additional WebAuthn+location/time gate before login completes. WARNING: blocks outside Cairo 08:00–22:00 or outside demo 50km radius, when geolocation unavailable, or device unsupported. Leave OFF for standard demo until the dedicated test. Browser geolocation is forgeable and not proof of identity.
+## Routes
 
-## Safety and limits
-- Localhost only. No real payment gateway or trusted email sending.
-- WebAuthn supports ES256/P-256, fmt none, user presence/verification flags and one-time challenge; not all passkeys/platforms supported. Production deployments should use maintained WebAuthn library with full protocol verification, HTTPS, key/recovery policy and a trusted external security review.
-- Behavioral timings are provided by client and spoofable; used for audit flag, not independent authentication. No raw keystrokes retained.
-- SAST/DAST, Red Team findings, naïve comparison and manual evidence are unfinished until run and documented by team.
-- Read `docs/FINAL_ONE_PASS_TEST_AR.md` for one-shot Mac user/admin/security test. Read `docs/SECURITY_DESIGN_BLUE_TEAM.md` for threat model/matrix and documented limitations.
+`/` catalogue · `/register` `/confirm` `/login` `/mfa` `/mfa/setup`
+`/mfa/recovery` `/account` `/security` `/security/behavior` · `/cart`
+`/checkout` `/orders` `/order/<id>` · `/newsletter` · `/admin` `/admin/audit`
+· passkey JSON endpoints under `/passkey/*`.
+
+## Configuration
+
+| Env | Default | Meaning |
+|---|---|---|
+| `SECURESHOP_DB` | `./secureshop.db` | SQLite path (tests always use temp files) |
+| `SECURESHOP_HOST`/`PORT` | `127.0.0.1:8000` | bind address — keep loopback |
+| `SECURESHOP_HTTPS` | off | adds `Secure` cookie flag + HSTS |
+| `SECURESHOP_RISK_GATE_ENFORCE` | off | forces passkey+geo/time gate at login |
+| `SECURESHOP_NAIVE_DB`/`_PORT` | `./naive_lab.db:5050` | lab only |
+
+## Honest limits
+
+- Localhost teaching build, not production. WebAuthn covers ES256 + `none`
+  attestation only (documented, tested with synthetic credentials).
+- Geolocation and typing timings are browser-reported — risk *signals* in the
+  audit log, never identity factors. The optional login gate is off by default.
+- Confirmation links / newsletter coupons print to the server terminal instead
+  of email, by design.
+- The final independent local audit and F1–F4 remediation retest are recorded
+  in `docs/REMEDIATION_REPORT.md`; real-device passkey and browser walkthroughs
+  remain pending — see `docs/SECURITY_COVERAGE.md` and `docs/TEST_RESULTS.md`.
+
+## Docs
+
+`docs/ARCHITECTURE.md` (one-page) · `docs/DEMO_RUNBOOK.md` (**start here for
+the demo**) · `docs/SECURITY_DESIGN_BLUE_TEAM.md` (threat model/STRIDE/DREAD) ·
+`docs/SECURITY_COVERAGE.md` (matrix) · `docs/ATTACK_EVIDENCE.md` ·
+`docs/DEMO_SCRIPT.md` · `docs/QA_PREP.md` · `docs/TEST_RESULTS.md` ·
+`docs/THIRD_PARTY_CREDITS.md` · Menna's original Arabic review/evidence docs
+preserved alongside.

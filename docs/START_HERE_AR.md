@@ -9,6 +9,6 @@
 - لتغطية security topics والمحاضرات: [SECURITY_COVERAGE.md](SECURITY_COVERAGE.md)
 - لتوثيق محاولات الهجوم الفعلية: [ATTACK_EVIDENCE_TEMPLATE.md](ATTACK_EVIDENCE_TEMPLATE.md)
 - لتقرير الفريق الأحمر: [RED_TEAM_FINDINGS_TEMPLATE.md](RED_TEAM_FINDINGS_TEMPLATE.md)
-- للاختبارات الآلية: نفّذي `./run_all_tests.sh`، آخر اختبار للبناء: **35 tests OK**.
+- للاختبارات الآلية: نفّذي `./run_all_tests.sh`، آخر اختبار للبناء: **42 tests OK**.
 
 التجربة اليدوية على جهازك لم تُجرَ بعد؛ WebAuthn وLocation يحتاجان إذن جهازك، ولا تستخدمي QR أو OTP في Screenshots. المقارنة مع نسخة naive، الفحص الأمني الخارجي، والتقرير الفعلي من Red Team لا يمكن اعتبارها مكتملة قبل جمع الأدلة.
