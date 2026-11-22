@@ -1,8 +1,9 @@
 # Demo runbook — reproducible, disposable
 
 Everything below uses `demo.db` (synthetic users) and `naive_lab.db`
-(disposable lab). Nothing touches a development database, real email, or real
-credentials. Verified on commit `4b70d88`.
+(disposable lab). Nothing touches a development database or real credentials.
+Mail: registration links and coupons print to the server terminal unless
+`SECURESHOP_SMTP_*` vars point at Gmail (see `.env.example`).
 
 ## Accounts (synthetic — demo only)
 
@@ -97,14 +98,15 @@ the secure app also defaults `SECURESHOP_HOST=127.0.0.1`.
 
 Run through in a browser; check each:
 - [ ] `/` catalogue renders desktop + narrow (mobile) widths, nav usable
-- [ ] Register → confirmation link appears in **server terminal**, link
-      confirms account → login succeeds
+- [ ] Register → confirmation link arrives by email (SMTP configured) or in
+      the **server terminal** (dev outbox); link confirms → login succeeds
 - [ ] Register with an existing email → identical page (no enumeration)
 - [ ] Wrong password → generic 401; 6th rapid attempt → 429
 - [ ] Cart persists across pages while logged in; qty=0 removes line
 - [ ] Checkout double-click → one order, one debit (idempotency key)
 - [ ] `/order/<other-user's-id>` → 404
-- [ ] Newsletter submit → no code on screen; code printed to terminal
+- [ ] Newsletter submit → no code on screen; code arrives by email or
+      terminal outbox
 - [ ] `/mfa/setup` QR scans in authenticator app; TOTP login works; wrong
       code → 401; replay same code → 401; recovery code works once
 - [ ] `/security/behavior` accepts 5 typed samples then blocks the 6th (409)

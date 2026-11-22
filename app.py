@@ -15,15 +15,39 @@ import html
 import os
 import re
 import secrets
+import smtplib
 import sqlite3
 import time
 import urllib.parse
 from contextlib import contextmanager
+from email.message import EmailMessage
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
+
+
+def _load_env_file(path):
+    """Minimal .env loader (KEY=VALUE, # comments, optional quotes/`export `).
+    Process environment wins over file values — like python-dotenv, stdlib only."""
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.startswith('export '):
+                line = line[7:].lstrip()
+            key, sep, value = line.partition('=')
+            key = key.strip()
+            if sep and key and key not in os.environ:
+                os.environ[key] = value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+
+
+_load_env_file(BASE / '.env')
+
 DB_FILE = Path(os.environ.get('SECURESHOP_DB', str(BASE / 'secureshop.db')))
 HOST = os.environ.get('SECURESHOP_HOST', '127.0.0.1')
 PORT = int(os.environ.get('SECURESHOP_PORT', '8000'))
@@ -34,6 +58,11 @@ MFA_LOCK_BASE = 5 * 60
 MFA_LOCK_MAX = 60 * 60
 MAX_BODY = 16_384
 RISK_GATE_ENFORCE = os.environ.get('SECURESHOP_RISK_GATE_ENFORCE') == '1'  # Optional, otherwise demo check only
+SMTP_HOST = os.environ.get('SECURESHOP_SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.environ.get('SECURESHOP_SMTP_PORT', '465'))
+SMTP_USER = os.environ.get('SECURESHOP_SMTP_USER', '')
+SMTP_PASS = os.environ.get('SECURESHOP_SMTP_PASS', '')
+SMTP_FROM = os.environ.get('SECURESHOP_SMTP_FROM', '') or SMTP_USER
 
 # Hash computed once at startup so a login attempt for an unknown email still
 # performs a real Argon2 verification and leaks no existence signal by timing.
@@ -84,6 +113,29 @@ def authenticator_qr(secret, account_email):
     return base64.b64encode(output.getvalue()).decode('ascii')
 
 
+def send_mail(to, subject, body):
+    """Deliver an out-of-band message via Gmail SMTP_SSL. When credentials
+    are unset or the send fails, the message is printed to the server
+    terminal instead, so a zero-config demo keeps working. Never call this
+    for content that also appears in an HTTP response."""
+    if not (SMTP_USER and SMTP_PASS):
+        print('DEV OUTBOX to %s — %s\n%s' % (to, subject, body), flush=True)
+        return False
+    msg = EmailMessage()
+    msg['From'] = SMTP_FROM
+    msg['To'] = to
+    msg['Subject'] = subject
+    msg.set_content(body)
+    try:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+        return True
+    except (OSError, smtplib.SMTPException) as exc:
+        print('MAIL SEND FAILED to %s: %s\n%s' % (to, exc, body), flush=True)
+        return False
+
+
 def ip_budget(conn, bucket, ip, limit=10, window=600):
     """Fixed-window per-IP throttle for unauthenticated write endpoints."""
     key = token_hash(bucket + '|' + ip)
@@ -128,6 +180,36 @@ def issue_recovery_codes(conn, user_id):
                      (user_id, token_hash(code)))
         codes.append(code)
     return codes
+
+
+def verify_mfa_code(conn, user_id, supplied):
+    """Return (ok, used_recovery, totp_step). A matching recovery digest is
+    deleted inside the caller's transaction so codes are single-use."""
+    current = conn.execute('SELECT totp_secret,totp_last_step FROM users WHERE id=?', (user_id,)).fetchone()
+    if re.fullmatch(r'[A-F0-9]{4}-[A-F0-9]{4}', supplied):
+        ok = conn.execute('DELETE FROM recovery_codes WHERE user_id=? AND code_hash=?',
+                          (user_id, token_hash(supplied))).rowcount == 1
+        return ok, True, None
+    step = match_totp_step(current['totp_secret'], supplied)
+    return step is not None and step > current['totp_last_step'], False, step
+
+
+def record_mfa_failure(conn, user_id, failures, now):
+    lock_seconds = mfa_lock_seconds(failures)
+    conn.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
+                 'ON CONFLICT(user_id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until,last_failure_at=excluded.last_failure_at',
+                 (user_id, failures, now + lock_seconds if lock_seconds else 0, now))
+
+
+def reset_mfa_throttle(conn, user_id):
+    conn.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
+                 'ON CONFLICT(user_id) DO UPDATE SET failures=0,locked_until=0,last_failure_at=0',
+                 (user_id, 0, 0, 0))
+
+
+def needs_passkey_gate(conn, user_id):
+    return bool(RISK_GATE_ENFORCE and
+                conn.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1', (user_id,)).fetchone())
 
 
 def audit_event(conn, event, actor_id=None, target_type=None, target_id=None):
@@ -762,12 +844,12 @@ class App(BaseHTTPRequestHandler):
                     c.execute('INSERT INTO pending_registrations(email,display_name,password_hash,token_hash,expires_at) VALUES(?,?,?,?,?) '
                               'ON CONFLICT(email) DO UPDATE SET display_name=excluded.display_name,password_hash=excluded.password_hash,token_hash=excluded.token_hash,expires_at=excluded.expires_at',
                               (email,name,hash_password(password),token_hash(token),int(time.time())+3600))
-            if token is None:
-                self.send_html(200,self.page('Registration submitted','<div class="notice">If the email can be registered, a confirmation link was sent. In this local development environment, confirmation links are printed to the server terminal.</div>'))
-                return
-            # Local demo only: log verification URL, never publish this pattern for production.
-            print('DEVELOPMENT CONFIRMATION LINK: http://%s:%s/confirm?token=%s' % (HOST,PORT,token), flush=True)
-            self.send_html(200,self.page('Registration submitted','<div class="notice">If the email can be registered, a confirmation link was sent. In this local development environment, confirmation links are printed to the server terminal.</div>'))
+            if token is not None:
+                # Tokens only ever travel via the mailbox (or the dev-terminal
+                # outbox when SMTP is unset) — never the HTTP response.
+                send_mail(email,'SecureShop Cafe - confirm your registration',
+                          'Welcome! Confirm your account within 1 hour:\nhttp://%s:%s/confirm?token=%s\n' % (HOST,PORT,token))
+            self.send_html(200,self.page('Registration submitted','<div class="notice">If the email can be registered, a confirmation link was sent to it. When mail is not configured, it appears on the server terminal instead.</div>'))
         elif path == '/login':
             email = d.get('email','').strip().lower(); password = d.get('password','')
             if len(email)>254: raise ValueError('Invalid email length.')
@@ -799,7 +881,7 @@ class App(BaseHTTPRequestHandler):
             c.execute('DELETE FROM login_attempts WHERE key_hash=?',(key,))
             if u['totp_secret']:
                 self.redirect('/mfa',self.rotate_session(c,pending_user_id=u['id']))
-            elif RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone():
+            elif needs_passkey_gate(c,u['id']):
                 self.redirect('/passkey/login',self.rotate_session(c,pending_passkey_id=u['id']))
             else:
                 audit_event(c, 'login_success', u['id'])
@@ -807,37 +889,21 @@ class App(BaseHTTPRequestHandler):
         elif path == '/mfa':
             if self.user or not self.pending_user_id:
                 return self.error(403,'No pending MFA login.')
-            u=c.execute('SELECT id,totp_secret,totp_last_step FROM users WHERE id=?',(self.pending_user_id,)).fetchone()
+            u=c.execute('SELECT id,totp_secret FROM users WHERE id=?',(self.pending_user_id,)).fetchone()
             if not u or not u['totp_secret']: return self.error(403,'Invalid MFA session.')
             key=token_hash('mfa|'+str(u['id']))
             now=int(time.time())
-            locked_until=0
             blocked=False
             failed=False
             recovery=False
             with transaction(c):
                 state=c.execute('SELECT failures,locked_until FROM mfa_throttles WHERE user_id=?',(u['id'],)).fetchone()
                 if state and state['locked_until']>now:
-                    locked_until=state['locked_until']
                     blocked=True
                 else:
-                    current=c.execute('SELECT totp_secret,totp_last_step FROM users WHERE id=?',(u['id'],)).fetchone()
-                    supplied = d.get('code','').strip().upper()
-                    recovery = bool(re.fullmatch(r'[A-F0-9]{4}-[A-F0-9]{4}',supplied))
-                    if recovery:
-                        ok = c.execute('DELETE FROM recovery_codes WHERE user_id=? AND code_hash=?',
-                                       (u['id'],token_hash(supplied))).rowcount == 1
-                        step = None
-                    else:
-                        step = match_totp_step(current['totp_secret'],supplied)
-                        ok = step is not None and step > current['totp_last_step']
+                    ok,recovery,step = verify_mfa_code(c,u['id'],d.get('code','').strip().upper())
                     if not ok:
-                        failures=(state['failures'] if state else 0)+1
-                        lock_seconds=mfa_lock_seconds(failures)
-                        locked_until=now+lock_seconds if lock_seconds else 0
-                        c.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
-                                  'ON CONFLICT(user_id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until,last_failure_at=excluded.last_failure_at',
-                                  (u['id'],failures,locked_until,now))
+                        record_mfa_failure(c,u['id'],(state['failures'] if state else 0)+1,now)
                         c.execute('INSERT INTO login_attempts(key_hash,at) VALUES(?,?)',(key,now))
                         audit_event(c, 'mfa_failed', u['id'])
                         failed=True
@@ -846,17 +912,15 @@ class App(BaseHTTPRequestHandler):
                             updated=c.execute('UPDATE users SET totp_last_step=? WHERE id=? AND totp_last_step<?',(step,u['id'],step)).rowcount
                             if updated!=1: raise ValueError('Security code already used.')
                         c.execute('DELETE FROM login_attempts WHERE key_hash=?',(key,))
-                        c.execute('INSERT INTO mfa_throttles(user_id,failures,locked_until,last_failure_at) VALUES(?,?,?,?) '
-                                  'ON CONFLICT(user_id) DO UPDATE SET failures=0,locked_until=0,last_failure_at=0',
-                                  (u['id'],0,0,0))
+                        reset_mfa_throttle(c,u['id'])
                         audit_event(c, 'mfa_recovery_used' if recovery else 'mfa_success', u['id'])
-                        if not (RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone()):
+                        if not needs_passkey_gate(c,u['id']):
                             audit_event(c, 'login_success', u['id'])
             if blocked:
                 return self.error(429,'Too many MFA attempts. Try again later.')
             if failed:
                 return self.error(401,'Invalid or already used security code.')
-            if RISK_GATE_ENFORCE and c.execute('SELECT 1 FROM passkeys WHERE user_id=? LIMIT 1',(u['id'],)).fetchone():
+            if needs_passkey_gate(c,u['id']):
                 self.redirect('/passkey/login',self.rotate_session(c,pending_passkey_id=u['id']))
             else:
                 self.redirect('/account',self.rotate_session(c,u['id']))
@@ -1058,10 +1122,11 @@ class App(BaseHTTPRequestHandler):
                     cp_id = c.execute('INSERT INTO coupons(code,percent_off) VALUES(?,10)',(code,)).lastrowid
                     c.execute('INSERT INTO newsletters(email,coupon_id) VALUES(?,?)',(email,cp_id))
                 # Coupons must never be shown to whoever submits a form: only the
-                # mailbox owner may learn the code. Local dev prints to the
-                # server terminal like the confirmation link; production email.
-                print('DEVELOPMENT NEWSLETTER COUPON for %s: %s' % (email,code), flush=True)
-            self.send_html(200,self.page('Newsletter','<div class="notice">If this email is new to our list, your one-time 10% coupon was sent to it. In this local development environment, it is printed to the server terminal.</div>'))
+                # mailbox owner may learn the code. SMTP when configured, else
+                # the dev-terminal outbox; never the HTTP response.
+                send_mail(email,'Your SecureShop Cafe coupon',
+                          'Your one-time 10%% off coupon code: %s\n' % code)
+            self.send_html(200,self.page('Newsletter','<div class="notice">If this email is new to our list, your one-time 10% coupon was sent to it. When mail is not configured, it appears on the server terminal instead.</div>'))
         elif path == '/admin/product':
             if not self.must_admin(): return
             name=d.get('name','').strip(); desc=d.get('description','').strip()

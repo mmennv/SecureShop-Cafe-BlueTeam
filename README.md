@@ -21,8 +21,9 @@ Open `http://localhost:8000` (passkeys require the `localhost` RP/origin —
 
 ## Users
 
-- **Customer:** `/register`, then copy the confirmation link printed to the
-  server terminal (this dev build has no real email — terminal = outbox).
+- **Customer:** `/register`, then click the confirmation link — sent by Gmail
+  SMTP when `SECURESHOP_SMTP_*` vars are set, else printed to the server
+  terminal as the dev outbox.
 - **Admin** (empty DB only):
   ```sh
   export SECURESHOP_ADMIN_EMAIL='admin@example.test'
@@ -61,6 +62,8 @@ the app database — run it against a throwaway DB (`SECURESHOP_DB=/tmp/x.db`).
 | `SECURESHOP_HTTPS` | off | adds `Secure` cookie flag + HSTS |
 | `SECURESHOP_RISK_GATE_ENFORCE` | off | forces passkey+geo/time gate at login |
 | `SECURESHOP_NAIVE_DB`/`_PORT` | `./naive_lab.db:5050` | lab only |
+| `SECURESHOP_SMTP_HOST`/`PORT` | `smtp.gmail.com:465` | mail relay — Gmail app password |
+| `SECURESHOP_SMTP_USER`/`PASS`/`FROM` | unset | unset ⇒ terminal outbox instead of email |
 
 ## Honest limits
 
@@ -68,8 +71,9 @@ the app database — run it against a throwaway DB (`SECURESHOP_DB=/tmp/x.db`).
   attestation only (documented, tested with synthetic credentials).
 - Geolocation and typing timings are browser-reported — risk *signals* in the
   audit log, never identity factors. The optional login gate is off by default.
-- Confirmation links / newsletter coupons print to the server terminal instead
-  of email, by design.
+- Confirmation links / newsletter coupons go via Gmail SMTP only when
+  `SECURESHOP_SMTP_USER`/`PASS` are set (see `.env.example`); otherwise they
+  print to the server terminal. They are never in the HTTP response.
 - The final independent local audit and F1–F4 remediation retest are recorded
   in `docs/REMEDIATION_REPORT.md`; real-device passkey and browser walkthroughs
   remain pending — see `docs/SECURITY_COVERAGE.md` and `docs/TEST_RESULTS.md`.

@@ -15,6 +15,9 @@ from pathlib import Path
 
 TEMP = tempfile.TemporaryDirectory()
 os.environ['SECURESHOP_DB'] = str(Path(TEMP.name) / 'testing.sqlite')
+# Force the dev outbox: a filled .env must never make tests hit real SMTP.
+os.environ['SECURESHOP_SMTP_USER'] = ''
+os.environ['SECURESHOP_SMTP_PASS'] = ''
 import app
 from auth_security import new_totp_secret, totp_at, verify_password
 import time
@@ -96,8 +99,8 @@ class SecureShopTests(WebTestHelpers, unittest.TestCase):
         with app.db() as c:
             self.assertIsNone(c.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone())
             self.assertIsNotNone(c.execute('SELECT email FROM pending_registrations WHERE email=?',(email,)).fetchone())
-        link=next(call.args[0] for call in output.call_args_list if 'DEVELOPMENT CONFIRMATION LINK:' in call.args[0])
-        token=re.search(r'token=([^\s]+)$',link).group(1)
+        link=next(call.args[0] for call in output.call_args_list if call.args and 'confirm?token=' in call.args[0])
+        token=re.search(r'confirm\?token=(\S+)',link).group(1)
         status,_,_=self.get('/confirm?token='+urllib.parse.quote(token,safe=''))
         self.assertEqual(status,200)
         self.assertEqual(self.login(email,'a long test password')[0],200)
@@ -174,6 +177,27 @@ class SecureShopTests(WebTestHelpers, unittest.TestCase):
         self.assertEqual(body,body2)  # identical response reveals nothing about prior subscription
         with app.db() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) AS n FROM newsletters WHERE email=?',('news@example.test',)).fetchone()['n'],1)
+
+    def test_send_mail_dev_outbox_without_smtp(self):
+        from unittest.mock import patch
+        with patch.object(app,'SMTP_USER',''),patch.object(app,'SMTP_PASS',''),patch('builtins.print') as out:
+            self.assertFalse(app.send_mail('dest@example.test','Subject','secret-body-1'))
+        printed='\n'.join(c.args[0] for c in out.call_args_list if c.args)
+        self.assertIn('dest@example.test',printed)
+        self.assertIn('secret-body-1',printed)
+
+    def test_send_mail_uses_smtp_when_configured(self):
+        from unittest.mock import MagicMock, patch
+        session=MagicMock()
+        ctx=MagicMock(); ctx.__enter__.return_value=session
+        with patch.object(app,'SMTP_USER','student@gmail.com'),patch.object(app,'SMTP_PASS','app-password'), \
+             patch('smtplib.SMTP_SSL',return_value=ctx) as factory:
+            self.assertTrue(app.send_mail('dest@example.test','Subject','hello body'))
+        factory.assert_called_once_with('smtp.gmail.com',465,timeout=10)
+        session.login.assert_called_once_with('student@gmail.com','app-password')
+        msg=session.send_message.call_args.args[0]
+        self.assertEqual(msg['To'],'dest@example.test')
+        self.assertIn('hello body',msg.get_content())
 
     def test_argon2id_password_storage(self):
         email,pw=self.create_user('argon2@example.test')
